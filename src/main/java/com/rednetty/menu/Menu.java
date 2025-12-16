@@ -1,0 +1,492 @@
+// Menu.java
+package com.rednetty.menu;
+
+import com.rednetty.PollPlugin;
+import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+import org.bukkit.Material;
+import org.bukkit.Sound;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.scheduler.BukkitTask;
+
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
+
+/**
+ * Base class for creating interactive menus/GUIs with performance optimization and visual effects
+ */
+public abstract class Menu {
+    private static final Logger LOGGER = Logger.getLogger(Menu.class.getName());
+    private static final Map<UUID, Menu> openMenus = new ConcurrentHashMap<>();
+    private static final MenuEventHandler eventHandler = new MenuEventHandler();
+    private static boolean initialized = false;
+
+    protected final Player player;
+    protected final Inventory inventory;
+    protected final Map<Integer, MenuItem> items = new HashMap<>();
+    protected final String originalTitle;
+
+    private BukkitTask refreshTask;
+    private boolean autoRefresh = false;
+    private int refreshInterval = 20;
+    private boolean playClickSounds = true;
+    private Sound clickSound = Sound.UI_BUTTON_CLICK;
+    private final Set<Integer> protectedSlots = new HashSet<>();
+    private final Map<String, Object> menuData = new HashMap<>();
+    private final Map<Integer, AnimatedMenuItem> animatedItems = new HashMap<>();
+    private BukkitTask animationTask;
+
+    /**
+     * Creates a new menu
+     *
+     * @param player The player who will see the menu
+     * @param title  The title of the inventory
+     * @param size   The size of the inventory (must be a multiple of 9)
+     */
+    public Menu(Player player, String title, int size) {
+        if (player == null) {
+            throw new IllegalArgumentException("Player cannot be null");
+        }
+
+        this.player = player;
+        this.originalTitle = title != null ? title : "Menu";
+        size = validateAndNormalizeSize(size);
+        this.inventory = Bukkit.createInventory(null, size, ChatColor.translateAlternateColorCodes('&', this.originalTitle));
+        initializeEventHandlers();
+    }
+
+    private int validateAndNormalizeSize(int size) {
+        if (size <= 0) {
+            LOGGER.warning("Invalid menu size " + size + ", defaulting to 9");
+            return 9;
+        }
+
+        int normalizedSize = ((size + 8) / 9) * 9;
+        normalizedSize = Math.min(54, normalizedSize);
+
+        if (normalizedSize != size) {
+            LOGGER.fine("Menu size adjusted from " + size + " to " + normalizedSize);
+        }
+
+        return normalizedSize;
+    }
+
+    private static synchronized void initializeEventHandlers() {
+        if (!initialized) {
+            Bukkit.getPluginManager().registerEvents(eventHandler, PollPlugin.getInstance());
+            initialized = true;
+            LOGGER.info("Menu event handlers initialized");
+        }
+    }
+
+    public void open() {
+        try {
+            Menu existingMenu = openMenus.get(player.getUniqueId());
+            if (existingMenu != null && existingMenu != this) {
+                existingMenu.close();
+            }
+
+            updateInventory();
+            openMenus.put(player.getUniqueId(), this);
+            onPreOpen();
+            player.openInventory(inventory);
+            startAutoRefresh();
+            startAnimations();
+            onPostOpen();
+
+            LOGGER.fine("Opened menu '" + originalTitle + "' for player " + player.getName());
+        } catch (Exception e) {
+            LOGGER.severe("Failed to open menu for player " + player.getName() + ": " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public void close() {
+        try {
+            onPreClose();
+            stopAutoRefresh();
+            stopAnimations();
+            player.closeInventory();
+            onPostClose();
+        } catch (Exception e) {
+            LOGGER.warning("Error closing menu for player " + player.getName() + ": " + e.getMessage());
+        }
+    }
+
+    public void setItem(int slot, MenuItem item) {
+        if (!isValidSlot(slot)) {
+            LOGGER.warning("Invalid slot " + slot + " for menu size " + inventory.getSize());
+            return;
+        }
+
+        if (item == null) {
+            removeItem(slot);
+            return;
+        }
+
+        items.put(slot, item);
+        inventory.setItem(slot, item.toItemStack());
+
+        if (item instanceof AnimatedMenuItem) {
+            animatedItems.put(slot, (AnimatedMenuItem) item);
+        }
+    }
+
+    public void setItem(int slot, ItemStack item) {
+        if (item == null) {
+            removeItem(slot);
+            return;
+        }
+
+        MenuItem menuItem = new MenuItem(item);
+        setItem(slot, menuItem);
+    }
+
+    public void removeItem(int slot) {
+        if (!isValidSlot(slot)) {
+            return;
+        }
+
+        items.remove(slot);
+        animatedItems.remove(slot);
+        inventory.setItem(slot, null);
+    }
+
+    public void createBorder(Material material, String name) {
+        ItemStack borderItem = new ItemStack(material);
+        MenuItem borderMenuItem = new MenuItem(borderItem).setDisplayName(name != null ? name : " ");
+
+        int size = inventory.getSize();
+        int rows = size / 9;
+
+        for (int i = 0; i < 9; i++) {
+            setItem(i, borderMenuItem);
+            if (rows > 1) {
+                setItem(size - 9 + i, borderMenuItem);
+            }
+        }
+
+        for (int row = 1; row < rows - 1; row++) {
+            setItem(row * 9, borderMenuItem);
+            setItem(row * 9 + 8, borderMenuItem);
+        }
+    }
+
+    public void createBorder() {
+        createBorder(Material.GRAY_STAINED_GLASS_PANE, ChatColor.GRAY + " ");
+    }
+
+    public void fillEmpty(Material material, String name) {
+        ItemStack fillerItem = new ItemStack(material);
+        MenuItem fillerMenuItem = new MenuItem(fillerItem).setDisplayName(name != null ? name : " ");
+
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            if (inventory.getItem(slot) == null) {
+                setItem(slot, fillerMenuItem);
+            }
+        }
+    }
+
+    private boolean isValidSlot(int slot) {
+        return slot >= 0 && slot < inventory.getSize();
+    }
+
+    public void setAutoRefresh(boolean autoRefresh, int intervalTicks) {
+        this.autoRefresh = autoRefresh;
+        this.refreshInterval = Math.max(1, intervalTicks);
+
+        if (isOpen()) {
+            if (autoRefresh) {
+                startAutoRefresh();
+            } else {
+                stopAutoRefresh();
+            }
+        }
+    }
+
+    private void startAutoRefresh() {
+        if (!autoRefresh) return;
+
+        stopAutoRefresh();
+
+        refreshTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!isOpen()) {
+                    cancel();
+                    return;
+                }
+
+                try {
+                    onRefresh();
+                    updateInventory();
+                } catch (Exception e) {
+                    LOGGER.warning("Error during menu refresh: " + e.getMessage());
+                }
+            }
+        }.runTaskTimer(PollPlugin.getInstance(), refreshInterval, refreshInterval);
+    }
+
+    private void stopAutoRefresh() {
+        if (refreshTask != null && !refreshTask.isCancelled()) {
+            refreshTask.cancel();
+            refreshTask = null;
+        }
+    }
+
+    private void startAnimations() {
+        if (animatedItems.isEmpty()) return;
+
+        stopAnimations();
+
+        animationTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!isOpen() || animatedItems.isEmpty()) {
+                    cancel();
+                    return;
+                }
+
+                for (Map.Entry<Integer, AnimatedMenuItem> entry : animatedItems.entrySet()) {
+                    AnimatedMenuItem animItem = entry.getValue();
+                    if (animItem.shouldUpdate()) {
+                        animItem.update();
+                        inventory.setItem(entry.getKey(), animItem.toItemStack());
+                    }
+                }
+            }
+        }.runTaskTimer(PollPlugin.getInstance(), 5L, 5L);
+    }
+
+    private void stopAnimations() {
+        if (animationTask != null && !animationTask.isCancelled()) {
+            animationTask.cancel();
+            animationTask = null;
+        }
+    }
+
+    protected void updateInventory() {
+        try {
+            for (Map.Entry<Integer, MenuItem> entry : items.entrySet()) {
+                int slot = entry.getKey();
+                if (isValidSlot(slot)) {
+                    inventory.setItem(slot, entry.getValue().toItemStack());
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.warning("Error updating inventory: " + e.getMessage());
+        }
+    }
+
+    protected void handleClick(int slot) {
+        if (!isValidSlot(slot)) {
+            return;
+        }
+
+        if (protectedSlots.contains(slot)) {
+            playSound(Sound.ENTITY_VILLAGER_NO, 0.5f, 1.0f);
+            return;
+        }
+
+        MenuItem item = items.get(slot);
+        if (item != null) {
+            if (playClickSounds) {
+                playSound(clickSound, 0.5f, 1.0f);
+            }
+
+            if (item.getClickHandler() != null) {
+                try {
+                    item.getClickHandler().onClick(player, slot);
+                } catch (Exception e) {
+                    LOGGER.warning("Error executing click handler for slot " + slot + ": " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    private void playSound(Sound sound, float volume, float pitch) {
+        if (player.isOnline()) {
+            player.playSound(player.getLocation(), sound, volume, pitch);
+        }
+    }
+
+    public boolean isOpen() {
+        return openMenus.get(player.getUniqueId()) == this &&
+                player.isOnline() &&
+                player.getOpenInventory().getTopInventory().equals(inventory);
+    }
+
+    public void protectSlot(int slot) {
+        protectedSlots.add(slot);
+    }
+
+    public void unprotectSlot(int slot) {
+        protectedSlots.remove(slot);
+    }
+
+    public void setData(String key, Object value) {
+        menuData.put(key, value);
+    }
+
+    public Object getData(String key) {
+        return menuData.get(key);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> T getData(String key, Class<T> type) {
+        Object value = menuData.get(key);
+        if (value != null && type.isInstance(value)) {
+            return (T) value;
+        }
+        return null;
+    }
+
+    public Player getPlayer() { return player; }
+    public Inventory getInventory() { return inventory; }
+    public String getTitle() { return originalTitle; }
+    public MenuItem getItem(int slot) { return items.get(slot); }
+    public int getSize() { return inventory.getSize(); }
+
+    public void setClickSoundsEnabled(boolean enabled) { this.playClickSounds = enabled; }
+    public void setClickSound(Sound sound) { this.clickSound = sound; }
+
+    protected void onPreOpen() {}
+    protected void onPostOpen() {}
+    protected void onPreClose() {}
+    protected void onPostClose() {}
+    protected void onRefresh() {}
+
+    private void onClose() {
+        openMenus.remove(player.getUniqueId());
+        stopAutoRefresh();
+        stopAnimations();
+    }
+
+    public static Menu getOpenMenu(Player player) {
+        return openMenus.get(player.getUniqueId());
+    }
+
+    public static void closeAllMenus() {
+        new ArrayList<>(openMenus.values()).forEach(Menu::close);
+        openMenus.clear();
+    }
+
+    public static int getOpenMenuCount() {
+        return openMenus.size();
+    }
+
+    public static Map<String, Object> getStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("openMenus", openMenus.size());
+        stats.put("initialized", initialized);
+        stats.put("registeredPlayers", openMenus.keySet().size());
+        return stats;
+    }
+
+    private static class MenuEventHandler implements Listener {
+
+        @EventHandler(priority = EventPriority.NORMAL)
+        public void onInventoryClick(InventoryClickEvent event) {
+            if (!(event.getWhoClicked() instanceof Player)) {
+                return;
+            }
+
+            Player player = (Player) event.getWhoClicked();
+            Menu menu = openMenus.get(player.getUniqueId());
+
+            if (menu != null && event.getView().getTopInventory().equals(menu.inventory)) {
+                event.setCancelled(true);
+
+                if (event.getRawSlot() < event.getView().getTopInventory().getSize()) {
+                    try {
+                        menu.handleClick(event.getRawSlot());
+                    } catch (Exception e) {
+                        LOGGER.warning("Error handling menu click: " + e.getMessage());
+                    }
+                }
+            }
+        }
+
+        @EventHandler(priority = EventPriority.NORMAL)
+        public void onInventoryDrag(InventoryDragEvent event) {
+            if (!(event.getWhoClicked() instanceof Player)) {
+                return;
+            }
+
+            Player player = (Player) event.getWhoClicked();
+            Menu menu = openMenus.get(player.getUniqueId());
+
+            if (menu != null && event.getView().getTopInventory().equals(menu.inventory)) {
+                for (int slot : event.getRawSlots()) {
+                    if (slot < event.getView().getTopInventory().getSize()) {
+                        event.setCancelled(true);
+                        return;
+                    }
+                }
+            }
+        }
+
+        @EventHandler(priority = EventPriority.NORMAL)
+        public void onInventoryClose(InventoryCloseEvent event) {
+            if (!(event.getPlayer() instanceof Player)) {
+                return;
+            }
+
+            Player player = (Player) event.getPlayer();
+            Menu menu = openMenus.get(player.getUniqueId());
+
+            if (menu != null && event.getView().getTopInventory().equals(menu.inventory)) {
+                try {
+                    menu.onClose();
+                } catch (Exception e) {
+                    LOGGER.warning("Error during menu close: " + e.getMessage());
+                }
+            }
+        }
+
+        @EventHandler(priority = EventPriority.NORMAL)
+        public void onPlayerQuit(PlayerQuitEvent event) {
+            Menu menu = openMenus.remove(event.getPlayer().getUniqueId());
+            if (menu != null) {
+                try {
+                    menu.stopAutoRefresh();
+                    menu.stopAnimations();
+                } catch (Exception e) {
+                    LOGGER.warning("Error cleaning up menu on player quit: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    public static abstract class AnimatedMenuItem extends MenuItem {
+        private long lastUpdate = 0;
+        private final long updateInterval;
+
+        public AnimatedMenuItem(Material material, long updateIntervalTicks) {
+            super(material);
+            this.updateInterval = updateIntervalTicks * 50;
+        }
+
+        public boolean shouldUpdate() {
+            return System.currentTimeMillis() - lastUpdate >= updateInterval;
+        }
+
+        public void update() {
+            lastUpdate = System.currentTimeMillis();
+            onUpdate();
+        }
+
+        protected abstract void onUpdate();
+    }
+}

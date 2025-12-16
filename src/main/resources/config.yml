@@ -1,0 +1,50 @@
+# PollPlugin Configuration
+# MongoDB database settings
+mongodb:
+  connection-string: "mongodb://localhost:27017"
+
+  # Database name to use
+  database: "pollplugin"
+
+  # Collection name for storing polls
+  collection: "polls"
+
+# Plugin settings
+settings:
+  # Maximum number of polls that can be active at once (0 = unlimited)
+  max-active-polls: 0
+
+  # Maximum duration for polls in days (0 = unlimited)
+  max-poll-duration-days: 30
+
+  # Minimum duration for polls in minutes
+  min-poll-duration-minutes: 5
+
+  # Whether to automatically clean up expired polls
+  auto-cleanup-expired: true
+
+  # How often to check for expired polls (in minutes)
+  cleanup-interval-minutes: 60
+
+# GUI settings
+gui:
+  # Whether to play sounds when clicking in GUIs
+  click-sounds: true
+
+  # Auto-refresh interval for poll GUIs (in seconds, 0 = disabled)
+  auto-refresh-seconds: 30
+
+# Message settings
+messages:
+  # Prefix for all plugin messages
+  prefix: "&8[&6Poll&8]&r "
+
+  # Various messages (supports color codes with &)
+  poll-created: "&aYour poll has been created successfully!"
+  poll-closed: "&eThe poll has been closed."
+  poll-removed: "&cThe poll has been removed."
+  vote-recorded: "&aYour vote has been recorded!"
+  already-voted: "&cYou have already voted on this poll!"
+  poll-not-found: "&cPoll not found or no longer active."
+  no-permission: "&cYou don't have permission to do that!"
+  invalid-duration: "&cInvalid duration format! Use: 1d, 5h, 30m"

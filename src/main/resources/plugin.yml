@@ -1,0 +1,60 @@
+name: PollPlugin
+version: 1.0.0
+main: com.rednetty.PollPlugin
+api-version: 1.21
+author: RedNetty
+description: A comprehensive polling plugin with GUI support and MongoDB storage
+
+commands:
+  createpoll:
+    description: Create a new poll with specified duration and question
+    usage: /createpoll <duration> <question>
+    permission: poll.create
+    aliases: [cp, newpoll]
+
+  poll:
+    description: View and interact with polls
+    usage: /poll [close|remove] [pollId]
+    permission: poll.use
+    aliases: [polls, voting]
+
+permissions:
+  poll.*:
+    description: Grants all poll permissions
+    children:
+      poll.create: true
+      poll.use: true
+      poll.close: true
+      poll.remove: true
+      poll.admin: true
+    default: op
+
+  poll.use:
+    description: Allows viewing and voting on polls
+    default: true
+
+  poll.create:
+    description: Allows creating new polls
+    default: op
+
+  poll.close:
+    description: Allows closing any poll
+    default: op
+
+  poll.remove:
+    description: Allows removing any poll
+    default: op
+
+  poll.admin:
+    description: Full administrative access to the poll system
+    children:
+      poll.create: true
+      poll.use: true
+      poll.close: true
+      poll.remove: true
+    default: op
+
+depend: []
+softdepend: []
+
+# Database configuration is handled in config.yml
